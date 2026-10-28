@@ -1,0 +1,74 @@
+from datetime import date
+import nh3
+from rest_framework import serializers
+from .models import Project, Task, Tag
+
+
+class TagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Tag
+        fields = ["id", "name"]
+
+
+class TaskSerializer(serializers.ModelSerializer):
+    tags = TagSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Task
+        fields = [
+            "id",
+            "project",
+            "title",
+            "description",
+            "priority",
+            "status",
+            "due_date",
+            "tags",
+            "owner",
+            "created_at",
+        ]
+        read_only_fields = ["owner"]
+
+    def validate_due_date(self, value):
+        if value and value < date.today():
+            raise serializers.ValidationError(
+                "La fecha límite no puede ser en el pasado."
+            )
+        return value
+
+    def validate_description(self, value):
+        # Clase 8: sanitización XSS — elimina todas las etiquetas HTML
+        return nh3.clean(value, tags=set())
+
+    def validate(self, data):
+        # En un PATCH, "data" trae solo los campos enviados.
+        # Lo que falte lo tomamos de la tarea que ya existe (self.instance).
+        instance = self.instance
+        status = data.get("status", instance.status if instance else None)
+        due_date = data.get("due_date", instance.due_date if instance else None)
+        project = data.get("project", instance.project if instance else None)
+
+        # Regla de la Clase 4
+        if status == "completada" and not due_date:
+            raise serializers.ValidationError(
+                "No se puede marcar una tarea como completada sin fecha límite registrada."
+            )
+
+        # Tarea de la Clase 4b
+        if status == "en_progreso" and project is not None:
+            hay_completadas = project.tasks.filter(status="completada").exists()
+            if not hay_completadas:
+                raise serializers.ValidationError(
+                    "No se puede pasar a 'en_progreso' una tarea de un proyecto "
+                    "que todavía no tiene ninguna tarea completada."
+                )
+
+        return data
+
+
+class ProjectSerializer(serializers.ModelSerializer):
+    tasks = TaskSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Project
+        fields = ["id", "name", "description", "tasks", "created_at"]
